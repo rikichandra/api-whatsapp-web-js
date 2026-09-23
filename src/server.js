@@ -50,11 +50,25 @@ function start() {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info(`caught ${signal}, shutting down`);
+
+    // Stop accepting new connections/requests immediately; existing in-flight
+    // requests are allowed to finish while sessions are torn down below.
+    server.close(() => {
+      logger.info('http server closed', { signal });
+    });
+
     sessionManager.shutdown()
+      .catch((error) => {
+        logger.error('session manager shutdown error', { signal, message: error.message });
+      })
       .finally(() => {
-        server.close(() => process.exit(0));
+        process.exit(0);
       });
-    setTimeout(() => process.exit(1), 15000).unref();
+
+    setTimeout(() => {
+      logger.error('graceful shutdown timed out, forcing exit', { signal });
+      process.exit(1);
+    }, 20000).unref();
   }
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));

@@ -16,6 +16,7 @@ const {
   removePidFile,
   isProcessAlive,
   ensureProcessGone,
+  findSessionProcessPids,
 } = require('./browserProcess');
 
 const REUSABLE_STATUSES = new Set(['initializing', 'qr', 'authenticated', 'ready']);
@@ -446,6 +447,14 @@ class SessionManager {
       const filePid = readPidFile(authDir);
       if (filePid) pidsToVerify.add(filePid);
 
+      // Neither of the above catches the case where the Browser object itself never
+      // got created (pupBrowser.process() never resolved a pid) but a real chrome.exe
+      // still spawned and is holding the profile's Windows process-singleton - that's
+      // exactly what produces an endless "already running" retry loop. Find it by
+      // command line instead of relying on a pid we never captured.
+      const orphanPids = await findSessionProcessPids(authDir);
+      for (const orphanPid of orphanPids) pidsToVerify.add(orphanPid);
+
       for (const candidatePid of pidsToVerify) {
         // eslint-disable-next-line no-await-in-loop
         await ensureProcessGone(candidatePid, authDir, { sessionId });
@@ -470,21 +479,20 @@ class SessionManager {
    */
   async reconcileOrphan(sessionId) {
     const authDir = sessionDirFor(config.sessionDir, sessionId);
-    const pid = readPidFile(authDir);
 
-    if (!pid) {
-      clearStaleLocks(authDir);
-      return;
+    const pids = new Set();
+    const filePid = readPidFile(authDir);
+    if (filePid) pids.add(filePid);
+    const scannedPids = await findSessionProcessPids(authDir);
+    for (const scannedPid of scannedPids) pids.add(scannedPid);
+
+    for (const pid of pids) {
+      if (!isProcessAlive(pid)) continue;
+      logger.warn('found orphaned browser process from previous run', { sessionId, pid, authDir, timestamp: nowIso() });
+      // eslint-disable-next-line no-await-in-loop
+      await ensureProcessGone(pid, authDir, { sessionId });
     }
 
-    if (!isProcessAlive(pid)) {
-      removePidFile(authDir);
-      clearStaleLocks(authDir);
-      return;
-    }
-
-    logger.warn('found orphaned browser process from previous run', { sessionId, pid, authDir, timestamp: nowIso() });
-    await ensureProcessGone(pid, authDir, { sessionId });
     removePidFile(authDir);
     clearStaleLocks(authDir);
   }

@@ -107,6 +107,40 @@ async function pidBelongsToSession(pid, authDir) {
   }
 }
 
+/**
+ * Fallback discovery for when we have no tracked pid at all (e.g. the Browser object
+ * creation itself threw before pupBrowser.process() ever resolved a pid): scans every
+ * chrome.exe on the box and keeps only the ones whose command line references this
+ * session's own userDataDir. This is how we find the orphaned process actually holding
+ * the Windows process-singleton that causes "already running" launch failures.
+ */
+async function findSessionProcessPids(authDir) {
+  if (process.platform !== 'win32') return [];
+
+  try {
+    const stdout = await execFileP('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      'Get-CimInstance Win32_Process -Filter "Name=\'chrome.exe\'" | Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress',
+    ]);
+    const raw = String(stdout || '').trim();
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    const normalizedDir = path.resolve(authDir).toLowerCase();
+
+    return rows
+      .filter((row) => row && typeof row.CommandLine === 'string' && row.CommandLine.toLowerCase().includes(normalizedDir))
+      .map((row) => row.ProcessId)
+      .filter((candidatePid) => Number.isFinite(candidatePid) && candidatePid > 0);
+  } catch (error) {
+    logger.warn('failed to scan for orphaned browser processes', { authDir, message: error.message });
+    return [];
+  }
+}
+
 async function killProcessTree(pid) {
   if (process.platform === 'win32') {
     await execFileP('taskkill', ['/PID', String(pid), '/T', '/F'], { timeout: KILL_TIMEOUT_MS })
@@ -161,4 +195,5 @@ module.exports = {
   isProcessAlive,
   waitForProcessExit,
   ensureProcessGone,
+  findSessionProcessPids,
 };

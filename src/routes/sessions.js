@@ -218,6 +218,20 @@ router.get('/:id/groups/lookup', asyncHandler(async (req, res) => {
     throw httpError(`No group found with name "${name}"`, 404, 'group_not_found');
   }
 
+  // TEMPORARY: ?debug=1 dumps the raw groupMetadata for each match so we can find the
+  // real community-link field name - remove once that's confirmed.
+  if (req.query.debug === '1') {
+    const rawResults = await Promise.allSettled(
+      matches.map((match) => session.client.getChatById(match.id)),
+    );
+    matches.forEach((match, index) => {
+      const raw = rawResults[index];
+      match._debugGroupMetadata = raw.status === 'fulfilled'
+        ? (raw.value?.groupMetadata ?? null)
+        : null;
+    });
+  }
+
   success(res, {
     id: req.params.id,
     matches,

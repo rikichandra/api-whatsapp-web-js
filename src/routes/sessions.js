@@ -74,45 +74,15 @@ router.get('/:id/contacts', asyncHandler(async (req, res) => {
 }));
 
 /**
- * Group names aren't unique across Communities (e.g. three different Communities can each
- * have a "General" sub-group), so every group's `parentGroupId` is resolved to the actual
- * Community display name here. Unresolvable/missing parents just get `communityName: null`.
- */
-async function attachCommunityNames(session, groups) {
-  const parentIds = [...new Set(groups.map((group) => group.parentGroupId).filter(Boolean))];
-
-  if (parentIds.length === 0) {
-    return groups.map((group) => ({ ...group, communityName: null }));
-  }
-
-  const parentResults = await Promise.allSettled(
-    parentIds.map((parentId) => session.client.getChatById(parentId)),
-  );
-
-  const nameByParentId = new Map();
-  parentResults.forEach((result, index) => {
-    if (result.status === 'fulfilled' && result.value) {
-      nameByParentId.set(
-        parentIds[index],
-        result.value.name ?? result.value.formattedTitle ?? null,
-      );
-    }
-  });
-
-  return groups.map((group) => ({
-    ...group,
-    communityName: group.parentGroupId
-      ? (nameByParentId.get(group.parentGroupId) ?? null)
-      : null,
-  }));
-}
-
-/**
  * getChats() is unstable across WhatsApp Web builds (see /:id/chats above), so groups are
  * discovered via getContacts() instead: group chats also show up there as contacts whose id
  * ends in `@g.us`, including Community sub-groups that were never opened in this session.
  * Each id is then resolved through getChatById() for full metadata, falling back to the bare
  * contact (id + name only) when that resolution fails.
+ *
+ * Note: whatsapp-web.js does not reliably expose which Community a group belongs to (its
+ * groupMetadata has no working parent-link field, and is itself inconsistently populated
+ * across calls) - so that mapping, where needed, is maintained manually on the Laravel side.
  */
 async function fetchGroups(session) {
   const contacts = await session.client.getContacts();
@@ -152,14 +122,12 @@ async function fetchGroups(session) {
             ?? fallbackContact?.pushname
             ?? 'Unnamed Group',
           isAnnouncement: false,
-          isCommunityLinked: false,
-          parentGroupId: null,
           participants: 0,
         };
       })
       .filter(Boolean);
 
-    return { groups: await attachCommunityNames(session, groups), degraded: false };
+    return { groups, degraded: false };
   } catch {
     const groups = groupIds.map((id) => {
       const fallbackContact = contacts.find(
@@ -172,13 +140,11 @@ async function fetchGroups(session) {
           ?? fallbackContact?.pushname
           ?? 'Unnamed Group',
         isAnnouncement: false,
-        isCommunityLinked: false,
-        parentGroupId: null,
         participants: 0,
       };
     });
 
-    return { groups: await attachCommunityNames(session, groups), degraded: true };
+    return { groups, degraded: true };
   }
 }
 
@@ -198,8 +164,8 @@ router.get('/:id/groups', asyncHandler(async (req, res) => {
  * `chats.find(chat => chat.isGroup && chat.name === name)` would with getChats() -
  * except backed by the getContacts()-based discovery above, which also finds Community
  * sub-groups. Names aren't unique across Communities (e.g. multiple Communities can each
- * have a "General" group), so this returns every match with its `communityName` attached
- * rather than guessing one - the caller disambiguates by community.
+ * have a "General" group), so this returns every match rather than guessing one - the
+ * caller disambiguates (e.g. Laravel's own group-id -> Community name mapping).
  */
 router.get('/:id/groups/lookup', asyncHandler(async (req, res) => {
   const session = sessionManager.requireReady(req.params.id);
@@ -216,20 +182,6 @@ router.get('/:id/groups/lookup', asyncHandler(async (req, res) => {
 
   if (matches.length === 0) {
     throw httpError(`No group found with name "${name}"`, 404, 'group_not_found');
-  }
-
-  // TEMPORARY: ?debug=1 dumps the raw groupMetadata for each match so we can find the
-  // real community-link field name - remove once that's confirmed.
-  if (req.query.debug === '1') {
-    const rawResults = await Promise.allSettled(
-      matches.map((match) => session.client.getChatById(match.id)),
-    );
-    matches.forEach((match, index) => {
-      const raw = rawResults[index];
-      match._debugGroupMetadata = raw.status === 'fulfilled'
-        ? (raw.value?.groupMetadata ?? null)
-        : null;
-    });
   }
 
   success(res, {

@@ -42,16 +42,10 @@ function serializeContact(contact) {
 function serializeGroup(chat) {
   if (!chat?.id?._serialized) return null;
 
-  const parentGroupId = chat.groupMetadata?.parentGroupId?._serialized
-    ?? chat.groupMetadata?.parentGroupId
-    ?? null;
-
   return {
     id: chat.id._serialized,
     name: chat.name ?? chat.formattedTitle ?? 'Unnamed Group',
     isAnnouncement: Boolean(chat.isReadOnly),
-    isCommunityLinked: Boolean(parentGroupId),
-    parentGroupId,
     participants: chat.groupMetadata?.participants?.length ?? 0,
   };
 }

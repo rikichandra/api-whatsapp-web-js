@@ -73,17 +73,22 @@ router.get('/:id/contacts', asyncHandler(async (req, res) => {
   });
 }));
 
-router.get('/:id/groups', asyncHandler(async (req, res) => {
-  const session = sessionManager.requireReady(req.params.id);
+/**
+ * getChats() is unstable across WhatsApp Web builds (see /:id/chats above), so groups are
+ * discovered via getContacts() instead: group chats also show up there as contacts whose id
+ * ends in `@g.us`, including Community sub-groups that were never opened in this session.
+ * Each id is then resolved through getChatById() for full metadata, falling back to the bare
+ * contact (id + name only) when that resolution fails.
+ */
+async function fetchGroups(session) {
+  const contacts = await session.client.getContacts();
+
+  const groupIds = contacts
+    .map((contact) => contact.id?._serialized)
+    .filter((id) => typeof id === 'string' && id.endsWith('@g.us'))
+    .slice(0, 50);
 
   try {
-    const contacts = await session.client.getContacts();
-
-    const groupIds = contacts
-      .map((contact) => contact.id?._serialized)
-      .filter((id) => typeof id === 'string' && id.endsWith('@g.us'))
-      .slice(0, 50);
-
     const groupResults = await Promise.allSettled(
       groupIds.map((groupId) => session.client.getChatById(groupId)),
     );
@@ -120,40 +125,68 @@ router.get('/:id/groups', asyncHandler(async (req, res) => {
       })
       .filter(Boolean);
 
-    success(res, {
-      id: req.params.id,
-      groups,
+    return { groups, degraded: false };
+  } catch {
+    const groups = groupIds.map((id) => {
+      const fallbackContact = contacts.find(
+        (contact) => contact.id?._serialized === id,
+      );
+
+      return {
+        id,
+        name: fallbackContact?.name
+          ?? fallbackContact?.pushname
+          ?? 'Unnamed Group',
+        isAnnouncement: false,
+        isCommunityLinked: false,
+        parentGroupId: null,
+        participants: 0,
+      };
     });
-  } catch (error) {
-    const contacts = await session.client.getContacts();
 
-    const groups = contacts
-      .map((contact) => contact.id?._serialized)
-      .filter((id) => typeof id === 'string' && id.endsWith('@g.us'))
-      .slice(0, 50)
-      .map((id) => {
-        const fallbackContact = contacts.find(
-          (contact) => contact.id?._serialized === id,
-        );
-
-        return {
-          id,
-          name: fallbackContact?.name
-            ?? fallbackContact?.pushname
-            ?? 'Unnamed Group',
-          isAnnouncement: false,
-          isCommunityLinked: false,
-          parentGroupId: null,
-          participants: 0,
-        };
-      });
-
-    success(res, {
-      id: req.params.id,
-      groups,
-      degraded: true,
-    });
+    return { groups, degraded: true };
   }
+}
+
+router.get('/:id/groups', asyncHandler(async (req, res) => {
+  const session = sessionManager.requireReady(req.params.id);
+  const { groups, degraded } = await fetchGroups(session);
+
+  success(res, {
+    id: req.params.id,
+    groups,
+    ...(degraded ? { degraded: true } : {}),
+  });
+}));
+
+/**
+ * Look up a single group by its exact display name (case-insensitive), the way
+ * `chats.find(chat => chat.isGroup && chat.name === name)` would with getChats() -
+ * except backed by the getContacts()-based discovery above, which also finds
+ * Community sub-groups. If more than one group shares the name, the first match wins.
+ */
+router.get('/:id/groups/lookup', asyncHandler(async (req, res) => {
+  const session = sessionManager.requireReady(req.params.id);
+  const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
+
+  if (!name) {
+    throw httpError('`name` query parameter is required', 422, 'validation_error');
+  }
+
+  const { groups, degraded } = await fetchGroups(session);
+  const group = groups.find(
+    (candidate) => candidate.name?.toLowerCase() === name.toLowerCase(),
+  );
+
+  if (!group) {
+    throw httpError(`No group found with name "${name}"`, 404, 'group_not_found');
+  }
+
+  success(res, {
+    id: req.params.id,
+    group,
+    ...(degraded ? { degraded: true } : {}),
+  });
 }));
 
 module.exports = router;

@@ -52,7 +52,7 @@ router.get('/:id/qr', asyncHandler(async (req, res) => {
   });
 }));
 
-router.get('/:id/chats', asyncHandler(async (req, res) => {
+router.get('/:id/chats', asyncHandler(async (req) => {
   sessionManager.requireReady(req.params.id);
   throw httpError(
     'Chat listing is temporarily disabled because whatsapp-web.js getChats is unstable on the current WhatsApp Web build.',
@@ -72,6 +72,40 @@ router.get('/:id/contacts', asyncHandler(async (req, res) => {
       .filter(Boolean),
   });
 }));
+
+/**
+ * Group names aren't unique across Communities (e.g. three different Communities can each
+ * have a "General" sub-group), so every group's `parentGroupId` is resolved to the actual
+ * Community display name here. Unresolvable/missing parents just get `communityName: null`.
+ */
+async function attachCommunityNames(session, groups) {
+  const parentIds = [...new Set(groups.map((group) => group.parentGroupId).filter(Boolean))];
+
+  if (parentIds.length === 0) {
+    return groups.map((group) => ({ ...group, communityName: null }));
+  }
+
+  const parentResults = await Promise.allSettled(
+    parentIds.map((parentId) => session.client.getChatById(parentId)),
+  );
+
+  const nameByParentId = new Map();
+  parentResults.forEach((result, index) => {
+    if (result.status === 'fulfilled' && result.value) {
+      nameByParentId.set(
+        parentIds[index],
+        result.value.name ?? result.value.formattedTitle ?? null,
+      );
+    }
+  });
+
+  return groups.map((group) => ({
+    ...group,
+    communityName: group.parentGroupId
+      ? (nameByParentId.get(group.parentGroupId) ?? null)
+      : null,
+  }));
+}
 
 /**
  * getChats() is unstable across WhatsApp Web builds (see /:id/chats above), so groups are
@@ -125,7 +159,7 @@ async function fetchGroups(session) {
       })
       .filter(Boolean);
 
-    return { groups, degraded: false };
+    return { groups: await attachCommunityNames(session, groups), degraded: false };
   } catch {
     const groups = groupIds.map((id) => {
       const fallbackContact = contacts.find(
@@ -144,7 +178,7 @@ async function fetchGroups(session) {
       };
     });
 
-    return { groups, degraded: true };
+    return { groups: await attachCommunityNames(session, groups), degraded: true };
   }
 }
 
@@ -160,10 +194,12 @@ router.get('/:id/groups', asyncHandler(async (req, res) => {
 }));
 
 /**
- * Look up a single group by its exact display name (case-insensitive), the way
+ * Look up groups by exact display name (case-insensitive), the way
  * `chats.find(chat => chat.isGroup && chat.name === name)` would with getChats() -
- * except backed by the getContacts()-based discovery above, which also finds
- * Community sub-groups. If more than one group shares the name, the first match wins.
+ * except backed by the getContacts()-based discovery above, which also finds Community
+ * sub-groups. Names aren't unique across Communities (e.g. multiple Communities can each
+ * have a "General" group), so this returns every match with its `communityName` attached
+ * rather than guessing one - the caller disambiguates by community.
  */
 router.get('/:id/groups/lookup', asyncHandler(async (req, res) => {
   const session = sessionManager.requireReady(req.params.id);
@@ -174,17 +210,17 @@ router.get('/:id/groups/lookup', asyncHandler(async (req, res) => {
   }
 
   const { groups, degraded } = await fetchGroups(session);
-  const group = groups.find(
+  const matches = groups.filter(
     (candidate) => candidate.name?.toLowerCase() === name.toLowerCase(),
   );
 
-  if (!group) {
+  if (matches.length === 0) {
     throw httpError(`No group found with name "${name}"`, 404, 'group_not_found');
   }
 
   success(res, {
     id: req.params.id,
-    group,
+    matches,
     ...(degraded ? { degraded: true } : {}),
   });
 }));

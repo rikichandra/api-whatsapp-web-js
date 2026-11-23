@@ -43,4 +43,5 @@ module.exports = {
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   ]),
   bodyLimit: process.env.BODY_LIMIT || '50mb',
+  debugBrowser: envBool(process.env.DEBUG_BROWSER, false),
 };

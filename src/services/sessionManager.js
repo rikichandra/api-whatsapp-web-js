@@ -200,6 +200,7 @@ class SessionManager {
 
     logger.info('BROWSER_LAUNCH_START', { sessionId, attempt, timestamp: nowIso() });
     this.captureBrowserPid(sessionId, session, client);
+    if (config.debugBrowser) this.attachPageDiagnostics(sessionId, session, client);
 
     client.initialize().catch((error) => {
       this.handleFailure(sessionId, session, error.message);
@@ -240,6 +241,40 @@ class SessionManager {
 
     if (this.sessions.get(sessionId) === session && !session.pid) {
       logger.warn('BROWSER_LAUNCH_FAILED', { sessionId, reason: 'no browser process observed', timestamp: nowIso() });
+    }
+  }
+
+  /**
+   * DEBUG_BROWSER=true only. Polls for the underlying Puppeteer page and forwards its
+   * console messages and failed/4xx+ requests to our logger, so a stalled WhatsApp Web
+   * load (browser launches, nothing renders) can be diagnosed instead of guessed at.
+   */
+  async attachPageDiagnostics(sessionId, session, client) {
+    const deadline = Date.now() + PID_CAPTURE_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      if (this.sessions.get(sessionId) !== session) return;
+
+      const page = client.pupPage;
+      if (page) {
+        page.on('console', (msg) => {
+          logger.info('BROWSER_CONSOLE', { sessionId, type: msg.type(), text: msg.text() });
+        });
+        page.on('requestfailed', (req) => {
+          logger.warn('BROWSER_REQUEST_FAILED', {
+            sessionId, url: req.url(), failure: req.failure()?.errorText,
+          });
+        });
+        page.on('response', (res) => {
+          if (res.status() >= 400) {
+            logger.warn('BROWSER_RESPONSE_ERROR', { sessionId, url: res.url(), status: res.status() });
+          }
+        });
+        return;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(PID_CAPTURE_POLL_MS);
     }
   }
 

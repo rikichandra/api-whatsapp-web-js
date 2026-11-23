@@ -1,0 +1,15 @@
+services:
+  wa-api:
+    build: .
+    container_name: wa-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - HOST=0.0.0.0
+      - NODE_ENV=production
+    ports:
+      - "127.0.0.1:3010:3000"
+    volumes:
+      - ./sessions:/usr/src/app/sessions
+      - ./.wwebjs_cache:/usr/src/app/.wwebjs_cache

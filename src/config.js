@@ -45,5 +45,5 @@ module.exports = {
   bodyLimit: process.env.BODY_LIMIT || '50mb',
   debugBrowser: envBool(process.env.DEBUG_BROWSER, false),
   // Pinned WA Web bundle version — see .env.example for why this exists.
-  webVersion: process.env.WEB_VERSION || '2.3000.1046959651',
+  webVersion: process.env.WEB_VERSION || '2.3000.1055802486-alpha',
 };

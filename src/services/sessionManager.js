@@ -171,8 +171,12 @@ class SessionManager {
       authTimeoutMs: 60000,
       takeoverOnConflict: true,
       takeoverTimeoutMs: 5000,
-      webVersion: config.webVersion,
-      webVersionCache: { type: 'local' },
+      ...(config.webVersion ? { webVersion: config.webVersion } : {}),
+      webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
+        strict: false,
+      },
       puppeteer: {
         headless: true,
         ...(config.chromePath ? { executablePath: config.chromePath } : {}),

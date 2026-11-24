@@ -40,9 +40,10 @@ function clearStaleLocks(authDir) {
   for (const name of STALE_LOCK_FILES) {
     const filePath = path.join(authDir, name);
     try {
-      if (fs.existsSync(filePath)) {
-        fs.rmSync(filePath, { force: true });
-      }
+      // Chromium's Singleton* entries are symlinks to "<hostname>-<pid>"; after a
+      // container rebuild they dangle, so existsSync() returns false. Use lstat.
+      fs.lstatSync(filePath);
+      fs.rmSync(filePath, { force: true });
     } catch (_) {
       /* Chrome may still hold the file; boot will retry */
     }

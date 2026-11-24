@@ -46,6 +46,7 @@ function classifyInitError(message = '') {
   if (/net::ERR_|ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|ERR_CONNECTION|ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE/i.test(msg)) return 'network_error';
   if (/Target closed|Session closed|Protocol error|Execution context was destroyed|Connection closed/i.test(msg)) return 'browser_crashed';
   if (/Unexpected token|Unexpected end of JSON|ENOENT.*(Preferences|Local State)/i.test(msg)) return 'session_corruption';
+  if (/Waiting failed:.*exceeded|auth timeout/i.test(msg)) return 'wa_web_load_timeout';
   return 'unknown';
 }
 
@@ -170,6 +171,7 @@ class SessionManager {
       authTimeoutMs: 60000,
       takeoverOnConflict: true,
       takeoverTimeoutMs: 5000,
+      webVersion: config.webVersion,
       webVersionCache: { type: 'local' },
       puppeteer: {
         headless: true,
